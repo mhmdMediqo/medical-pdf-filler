@@ -4,54 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Medical PDF Filler</title>
-    <meta
-      name="description"
-      content="Upload a medical PDF form, choose a conversation, extract structured fields with the OpenAI API, and download a filled form."
-    />
+    <meta name="description" content="Upload a medical PDF form, choose a conversation, extract structured fields with the OpenAI API, and download a filled form." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="page-shell">
-      <div class="bg-grid"></div>
-      <div class="bg-glow bg-glow-a"></div>
-      <div class="bg-glow bg-glow-b"></div>
+      <div class="bg-grid"></div><div class="bg-glow bg-glow-a"></div><div class="bg-glow bg-glow-b"></div>
       <header class="hero">
-        <nav class="topbar">
-          <div class="brand"><span class="brand-mark"></span><span>Medical PDF Filler</span></div>
-          <a class="ghost-link" href="#workspace">Launch Workspace</a>
-        </nav>
-        <div class="hero-copy reveal">
-          <p class="eyebrow">Conversation to clinical PDF, in one pass</p>
-          <h1>Turn medical conversations into <span>filled PDF forms</span> with a precise ChatGPT prompt.</h1>
-          <p class="hero-body">This single-page workflow runs on static hosting, reads the fields in a fillable PDF, asks the OpenAI API for structured values, and writes them back into the form directly in the browser.</p>
-          <div class="hero-actions"><a class="button-primary" href="#workspace">Start Filling</a><a class="button-secondary" href="./sample-medical-form.pdf" download>Download Demo Form</a></div>
-          <div class="hero-metrics"><div><strong>Static-first</strong><span>GitHub Pages compatible</span></div><div><strong>Schema-driven</strong><span>Strict JSON output from the API</span></div><div><strong>Browser fill</strong><span>No backend required for the demo</span></div></div>
-        </div>
+        <nav class="topbar"><div class="brand"><span class="brand-mark"></span><span>Medical PDF Filler</span></div><a class="ghost-link" href="#workspace">Launch Workspace</a></nav>
+        <div class="hero-copy reveal"><p class="eyebrow">Conversation to clinical PDF, in one pass</p><h1>Turn medical conversations into <span>filled PDF forms</span> with a precise ChatGPT prompt.</h1><p class="hero-body">This single-page workflow runs on static hosting, reads the fields in a fillable PDF, asks the OpenAI API for structured values, and writes them back into the form directly in the browser.</p><div class="hero-actions"><a class="button-primary" href="#workspace">Start Filling</a></div><div class="hero-metrics"><div><strong>Static-first</strong><span>GitHub Pages compatible</span></div><div><strong>Schema-driven</strong><span>Strict JSON output from the API</span></div><div><strong>Browser fill</strong><span>No backend required for the demo</span></div></div></div>
         <div class="hero-panel reveal"><div class="panel-card panel-card-lg"><span class="panel-label">Pipeline</span><ol class="pipeline-list"><li>Upload a fillable medical PDF form</li><li>Pick a sample conversation or paste your own</li><li>Send field inventory plus transcript to OpenAI</li><li>Review mapped answers and download the filled PDF</li></ol></div><div class="panel-card panel-card-sm"><span class="panel-label">Best fit</span><p>Intake forms, follow-up notes, symptom summaries, treatment plan forms, and other AcroForm-based PDFs.</p></div></div>
       </header>
       <main id="workspace" class="workspace">
         <section class="section section-intro reveal"><div><p class="section-kicker">Workspace</p><h2>Upload the form, then drive it with a conversation.</h2></div><p class="section-copy">The app reads existing PDF field names first, then generates a field-by-field prompt so the model fills only what the conversation actually supports.</p></section>
-        <section class="section app-grid">
-          <div class="stack-column">
-            <article class="glass-block reveal"><div class="block-heading"><div><p class="section-kicker">Step 1</p><h3>PDF Form</h3></div><button id="use-demo-form" class="tiny-button" type="button">Use Demo Form</button></div><label class="dropzone" for="pdf-upload"><input id="pdf-upload" type="file" accept="application/pdf" /><span class="dropzone-title">Drop a fillable PDF form here</span><span class="dropzone-copy">Or click to browse. The app inspects field names locally in your browser.</span></label><div class="status-grid"><div><span class="label">Loaded file</span><strong id="pdf-name">No PDF selected</strong></div><div><span class="label">Detected fields</span><strong id="field-count">0</strong></div></div><div class="field-list-shell"><div class="field-list-header"><span>Field inventory</span><span id="field-badge" class="field-badge">Waiting for PDF</span></div><div id="field-list" class="field-list empty-state">Upload a fillable PDF to inspect the medical form fields.</div></div></article>
-            <article class="glass-block reveal"><div class="block-heading"><div><p class="section-kicker">Step 2</p><h3>Conversation</h3></div><button id="clear-conversation" class="tiny-button" type="button">Clear</button></div><textarea id="conversation-input" class="conversation-input" placeholder="Paste a doctor-patient conversation here..."></textarea><div class="sample-header"><div><p class="section-kicker">Built-in samples</p><h4>Choose a conversation starter</h4></div></div><div id="sample-grid" class="sample-grid"></div></article>
-          </div>
-          <div class="stack-column">
-            <article class="glass-block reveal"><div class="block-heading"><div><p class="section-kicker">Step 3</p><h3>OpenAI Prompt</h3></div><button id="reset-prompt" class="tiny-button" type="button">Reset Prompt</button></div><div class="config-grid"><label><span class="label">OpenAI API key</span><input id="api-key" type="password" class="text-input" placeholder="sk-..." autocomplete="off" /></label><label><span class="label">Model</span><input id="model-input" type="text" class="text-input" value="gpt-4o-mini" /></label></div><label class="prompt-label"><span class="label">Instructions sent to the API</span><textarea id="prompt-template" class="prompt-template"></textarea></label><div class="action-row"><button id="run-fill" class="button-primary" type="button">Generate Field Map</button><button id="download-filled" class="button-secondary" type="button" disabled>Download Filled PDF</button></div><p class="fine-print">For a static GitHub Pages demo, the API key is entered by the user in the browser. For production use, move the API call to a server or edge function.</p></article>
-            <article class="glass-block reveal"><div class="block-heading"><div><p class="section-kicker">Step 4</p><h3>Result</h3></div><span id="run-status" class="field-badge">Idle</span></div><div id="summary-cards" class="summary-cards"><div><span class="label">Mapped fields</span><strong id="mapped-count">0</strong></div><div><span class="label">Unresolved fields</span><strong id="missing-count">0</strong></div><div><span class="label">Confidence mix</span><strong id="confidence-mix">n/a</strong></div></div><div class="result-columns"><div><div class="result-header"><span>Field mapping</span></div><div id="result-list" class="result-list empty-state">Run the workflow to see the mapped PDF values here.</div></div><div><div class="result-header"><span>Structured JSON</span></div><pre id="json-output" class="json-output">{
+        <section class="section app-grid"><div class="stack-column"><article class="glass-block reveal"><div class="block-heading"><div><p class="section-kicker">Step 1</p><h3>PDF Form</h3></div></div><label class="dropzone" for="pdf-upload"><input id="pdf-upload" type="file" accept="application/pdf" /><span class="dropzone-title">Drop a fillable PDF form here</span><span class="dropzone-copy">Or click to browse. The app inspects field names locally in your browser.</span></label><div class="status-grid"><div><span class="label">Loaded file</span><strong id="pdf-name">No PDF selected</strong></div><div><span class="label">Detected fields</span><strong id="field-count">0</strong></div></div><div class="field-list-shell"><div class="field-list-header"><span>Field inventory</span><span id="field-badge" class="field-badge">Waiting for PDF</span></div><div id="field-list" class="field-list empty-state">Upload a fillable PDF to inspect the medical form fields.</div></div></article><article class="glass-block reveal"><div class="block-heading"><div><p class="section-kicker">Step 2</p><h3>Conversation</h3></div><button id="clear-conversation" class="tiny-button" type="button">Clear</button></div><textarea id="conversation-input" class="conversation-input" placeholder="Paste a doctor-patient conversation here..."></textarea><div class="sample-header"><div><p class="section-kicker">Built-in samples</p><h4>Choose a conversation starter</h4></div></div><div id="sample-grid" class="sample-grid"></div></article></div><div class="stack-column"><article class="glass-block reveal"><div class="block-heading"><div><p class="section-kicker">Step 3</p><h3>OpenAI Prompt</h3></div><button id="reset-prompt" class="tiny-button" type="button">Reset Prompt</button></div><div class="config-grid"><label><span class="label">OpenAI API key</span><input id="api-key" type="password" class="text-input" placeholder="sk-..." autocomplete="off" /></label><label><span class="label">Model</span><input id="model-input" type="text" class="text-input" value="gpt-4o-mini" /></label></div><label class="prompt-label"><span class="label">Instructions sent to the API</span><textarea id="prompt-template" class="prompt-template"></textarea></label><div class="action-row"><button id="run-fill" class="button-primary" type="button">Generate Field Map</button><button id="download-filled" class="button-secondary" type="button" disabled>Download Filled PDF</button></div><p class="fine-print">For a static GitHub Pages demo, the API key is entered by the user in the browser. For production use, move the API call to a server or edge function.</p></article><article class="glass-block reveal"><div class="block-heading"><div><p class="section-kicker">Step 4</p><h3>Result</h3></div><span id="run-status" class="field-badge">Idle</span></div><div id="summary-cards" class="summary-cards"><div><span class="label">Mapped fields</span><strong id="mapped-count">0</strong></div><div><span class="label">Unresolved fields</span><strong id="missing-count">0</strong></div><div><span class="label">Confidence mix</span><strong id="confidence-mix">n/a</strong></div></div><div class="result-columns"><div><div class="result-header"><span>Field mapping</span></div><div id="result-list" class="result-list empty-state">Run the workflow to see the mapped PDF values here.</div></div><div><div class="result-header"><span>Structured JSON</span></div><pre id="json-output" class="json-output">{
   "status": "waiting"
-}</pre></div></div></article>
-          </div>
-        </section>
+}</pre></div></div></article></div></section>
       </main>
     </div>
-    <script src="./vendor/pdf-lib.min.js"></script>
-    <script src="./app.js" type="module"></script>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <script src="./app.js"></script>
   </body>
 </html>
