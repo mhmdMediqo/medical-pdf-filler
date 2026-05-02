@@ -11,6 +11,9 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -27,10 +30,17 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Validate static site
         run: |
+          set -e
           test -f index.html
+          test -f styles.css
+          test -f app.js
+          grep -q "styles.css" index.html
+          grep -q "app.js" index.html
           echo "Static site files found"
 
       - name: Upload artifact
