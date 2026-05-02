@@ -1,208 +1,84 @@
-const SAMPLE_CONVERSATIONS=[{title:"Respiratory case",body:`Patient: I've had a fever and a dry cough for three days.
-Doctor: Any shortness of breath or chest pain?
-Patient: Mild shortness of breath when climbing stairs.
-Doctor: Any chronic conditions?
-Patient: No, generally healthy.
-Doctor: I'll record suspected viral respiratory infection and order tests.`},{title:"Diabetes follow-up",body:`Patient: I'm here for my diabetes check-up.
-Doctor: How have your glucose readings been?
-Patient: Mostly between 180 and 220.
-Doctor: Any dizziness or vision issues?
-Patient: Slight blurred vision in the evening.
-Doctor: We'll note uncontrolled glucose levels and adjust medication.`},{title:"Pediatric headache",body:`Parent: My child has been complaining of headaches.
-Doctor: Any nausea or vomiting?
-Parent: Mild nausea yesterday.
-Doctor: Any recent injuries?
-Parent: No.
-Doctor: We'll log tension-type headache and recommend hydration and rest.`}];
-
-let currentPdfBytes=null;
-let currentFieldNames=[];
-let filledPdfBytes=null;
-
-const pdfInput=document.getElementById("pdf-upload");
-const pdfName=document.getElementById("pdf-name");
-const fieldCount=document.getElementById("field-count");
-const fieldList=document.getElementById("field-list");
-const fieldBadge=document.getElementById("field-badge");
-const conversationInput=document.getElementById("conversation-input");
-const sampleGrid=document.getElementById("sample-grid");
-const runButton=document.getElementById("run-fill");
-const downloadButton=document.getElementById("download-filled");
-const resultList=document.getElementById("result-list");
-const jsonOutput=document.getElementById("json-output");
-const mappedCount=document.getElementById("mapped-count");
-const missingCount=document.getElementById("missing-count");
-const confidenceMix=document.getElementById("confidence-mix");
-const runStatus=document.getElementById("run-status");
-const clearConversationBtn=document.getElementById("clear-conversation");
-
-function initSamples(){
-  SAMPLE_CONVERSATIONS.forEach(sample=>{
-    const card=document.createElement("button");
-    card.type="button";
-    card.className="sample-card";
-    card.innerHTML=`<strong>${sample.title}</strong><p>${sample.body.slice(0,130)}...</p>`;
-    card.addEventListener("click",()=>{conversationInput.value=sample.body;});
-    sampleGrid.appendChild(card);
-  });
-}
-
-function setStatus(text,type="idle"){
-  runStatus.textContent=text;
-  runStatus.style.background=type==="error"?"rgba(255,92,122,0.2)":"rgba(22,224,189,0.12)";
-  runStatus.style.color=type==="error"?"#ff9bb0":"#7debd8";
-}
-
-function renderFieldList(names){
-  if(!names.length){
-    fieldList.classList.add("empty-state");
-    fieldList.textContent="No fillable fields detected.";
-    fieldBadge.textContent="No fields";
-    return;
-  }
-  fieldList.classList.remove("empty-state");
-  fieldList.innerHTML="";
-  names.forEach(name=>{
-    const chip=document.createElement("div");
-    chip.className="field-chip";
-    chip.textContent=name;
-    fieldList.appendChild(chip);
-  });
-  fieldBadge.textContent=`${names.length} fields`;
-}
-
-async function loadPdfFromFile(file){
-  const arrayBuffer=await file.arrayBuffer();
-  currentPdfBytes=new Uint8Array(arrayBuffer);
-  await inspectPdf();
-}
-
-async function inspectPdf(){
-  if(!currentPdfBytes)return;
-  try{
-    const pdfDoc=await PDFLib.PDFDocument.load(currentPdfBytes);
-    const form=pdfDoc.getForm();
-    const fields=form.getFields();
-    currentFieldNames=fields.map(field=>field.getName());
-    fieldCount.textContent=String(currentFieldNames.length);
-    renderFieldList(currentFieldNames);
-    setStatus("PDF loaded");
-  }catch(e){
-    console.error(e);
-    alert("Failed to read PDF fields. Ensure the form is fillable (AcroForm).");
-    setStatus("PDF error","error");
-  }
-}
-
-async function callApplicationAI(){
-  const conversation=conversationInput.value.toLowerCase();
-  const mapping={};
-  currentFieldNames.forEach(field=>{
-    const normalized=field.toLowerCase();
-    let value=null;
-    if(normalized.includes("symptom")||normalized.includes("complaint")){
-      if(conversation.includes("cough"))value="Fever, dry cough, mild shortness of breath";
-      else if(conversation.includes("glucose")||conversation.includes("diabetes"))value="Elevated glucose readings and blurred vision";
-      else if(conversation.includes("headache"))value="Headache with mild nausea";
-    }else if(normalized.includes("diagnosis")||normalized.includes("assessment")){
-      if(conversation.includes("cough"))value="Suspected viral respiratory infection";
-      else if(conversation.includes("diabetes"))value="Uncontrolled diabetes follow-up";
-      else if(conversation.includes("headache"))value="Possible tension-type headache";
-    }else if(normalized.includes("plan")||normalized.includes("treatment")){
-      if(conversation.includes("test"))value="Order diagnostic tests and follow-up";
-      else if(conversation.includes("medication"))value="Adjust medication and monitor glucose";
-      else value="Clinical follow-up as needed";
-    }else if(normalized.includes("name")){
-      value=null;
-    }
-    mapping[field]={value,confidence:value?0.82:0.2};
-  });
-  return {fields:mapping,note:"Demo local mapper. Production API orchestration should be handled inside the application backend."};
-}
-
-function renderResult(mapping){
-  const entries=Object.entries(mapping);
-  resultList.innerHTML="";
-  if(!entries.length){
-    resultList.classList.add("empty-state");
-    resultList.textContent="No mapped fields returned.";
-    mappedCount.textContent="0";
-    missingCount.textContent="0";
-    confidenceMix.textContent="n/a";
-    return;
-  }
-  resultList.classList.remove("empty-state");
-  let mapped=0,missing=0;
-  const confidences=[];
-  entries.forEach(([field,meta])=>{
-    const item=document.createElement("div");
-    item.className="result-item";
-    const value=meta&&meta.value!==undefined?meta.value:null;
-    const confidence=meta&&typeof meta.confidence==="number"?meta.confidence:null;
-    if(value!==null&&value!==""&&value!==undefined)mapped+=1;else missing+=1;
-    if(confidence!==null)confidences.push(confidence);
-    item.innerHTML=`<strong>${field}</strong><span>${value??"—"}</span><small>confidence: ${confidence??"n/a"}</small>`;
-    resultList.appendChild(item);
-  });
-  mappedCount.textContent=String(mapped);
-  missingCount.textContent=String(missing);
-  confidenceMix.textContent=confidences.length?`avg ${((confidences.reduce((a,b)=>a+b,0)/confidences.length)*100).toFixed(0)}%`:"n/a";
-}
-
-async function fillPdfWithMapping(mapping){
-  const pdfDoc=await PDFLib.PDFDocument.load(currentPdfBytes);
-  const form=pdfDoc.getForm();
-  Object.entries(mapping).forEach(([fieldName,meta])=>{
-    const value=meta&&meta.value!==undefined?meta.value:null;
-    if(value===null||value===undefined)return;
-    try{form.getTextField(fieldName).setText(String(value));}
-    catch(e){console.warn("Unable to set text field",fieldName,e);}
-  });
-  form.updateFieldAppearances();
-  return await pdfDoc.save();
-}
-
-async function run(){
-  if(!currentPdfBytes){alert("Upload a PDF form first.");return;}
-  if(!conversationInput.value.trim()){alert("Provide a conversation.");return;}
-  setStatus("AI mapping…");
-  runButton.disabled=true;
-  downloadButton.disabled=true;
-  try{
-    const parsed=await callApplicationAI();
-    const mapping=parsed.fields||{};
-    jsonOutput.textContent=JSON.stringify(parsed,null,2);
-    renderResult(mapping);
-    filledPdfBytes=await fillPdfWithMapping(mapping);
-    downloadButton.disabled=false;
-    setStatus("Completed");
-  }catch(e){
-    console.error(e);
-    alert(e.message);
-    setStatus("Error","error");
-  }finally{
-    runButton.disabled=false;
-  }
-}
-
-function downloadPdf(){
-  if(!filledPdfBytes)return;
-  const blob=new Blob([filledPdfBytes],{type:"application/pdf"});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;
-  a.download="filled-medical-form.pdf";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-pdfInput.addEventListener("change",e=>{
-  const file=e.target.files&&e.target.files[0];
-  if(file){pdfName.textContent=file.name;loadPdfFromFile(file);}
-});
-runButton.addEventListener("click",run);
-downloadButton.addEventListener("click",downloadPdf);
-clearConversationBtn.addEventListener("click",()=>{conversationInput.value="";});
-initSamples();
+const SAMPLE_CONVERSATIONS=[
+{title:"AU GPMP - Scoliosis chiropractor",body:`[Speaker:0]: Confirming this is a demo Australian sample. Patient Liam Carter, age 16, address SAMPLE 18 Banksia Street, Point Cook VIC 3030. Provider number DEMO458721AB.
+[Speaker:0]: Okay. How can I help today?
+[Speaker:1]: Just needed to get a care plan for his chiropractor.
+[Speaker:0]: Okay, yeah.
+[Speaker:1]: He has a mild form of scoliosis.
+[Speaker:0]: Scoliosis, yes.
+[Speaker:1]: He has been seeing the chiro for the last two years.
+[Speaker:0]: Any improvement or progress?
+[Speaker:2]: It is getting better.
+[Speaker:0]: Any pain, numbness, pins and needles?
+[Speaker:2]: No.
+[Speaker:0]: Good. Your last care plan was April last year with no review since then, so we can do it again. Is it still Lakeside Chiro?
+[Speaker:1]: Yeah.
+[Speaker:0]: This referral is for five allied health sessions this calendar year. I will set up a GP management plan for chiropractic care due to scoliosis, to reduce pain, improve movement, maintain function, and prevent complications.`},
+{title:"AU CDM - Diabetes asthma pain referral",body:`[Speaker:0]: Demo Australian sample. Patient Mark Wilson, age 46, address SAMPLE 42 Eucalyptus Avenue, Werribee VIC 3030. Provider number DEMO389654KL.
+[Speaker:0]: Hi, Doctor. I need medication scripts renewed and a referral to a pain specialist. My lower back pain is bad again. I also have insomnia, financial stress, and I want an ASD or ADHD assessment because my eight-year-old son was recently diagnosed.
+[Speaker:1]: Let us go through this. You had a spinal injury from a motor vehicle accident and chronic pain since then?
+[Speaker:0]: Yes, it is flaring up again.
+[Speaker:1]: We will arrange a pain specialist referral. Blood pressure is 142 over 76, weight 142 kg, height 181 cm, BMI 42. ECG is normal. Oxygen saturation is 96 percent. There is a general wheeze and spirometry shows an obstructive pattern, suggesting asthma.
+[Speaker:0]: I have been short of breath with exertion.
+[Speaker:1]: I will start Ventolin, create a chronic asthma management plan, and refer you to an exercise physiologist. I will renew Byetta, NovoRapid PenFill, Ozempic, hydrochlorothiazide, irbesartan, and ezetimibe. We will continue the chronic disease management plan and refer you to a diabetes educator. I will also provide a referral for ASD ADHD assessment.`},
+{title:"AU MHCP - Anxiety work stress",body:`[Speaker:0]: Demo Australian sample. Patient Sarah Nguyen, age 32, address SAMPLE 7 Jacaranda Crescent, Parramatta NSW 2150. Provider number DEMO621904QX.
+[Speaker:0]: What brings you in today?
+[Speaker:1]: I need help with anxiety. Work has been overwhelming, I am not sleeping properly, and I get panic symptoms before meetings.
+[Speaker:0]: How long has this been happening?
+[Speaker:1]: Around six months, worse over the last two months. I am avoiding calls and crying most mornings.
+[Speaker:0]: Your K10 score is 31, suggesting severe psychological distress. I recommend a Mental Health Treatment Plan and referral to a psychologist under Medicare.
+[Speaker:1]: I would like that.
+[Speaker:0]: I will refer you to MindWell Psychology in Parramatta. Goals are reducing panic symptoms, improving sleep, and returning to normal work function. Review in four weeks.`},
+{title:"AU EPC - Knee osteoarthritis physio",body:`[Speaker:0]: Demo Australian sample. Patient Robert Harris, age 68, address SAMPLE 23 Murray Road, Bendigo VIC 3550. Provider number DEMO734208NM.
+[Speaker:0]: How can I help today?
+[Speaker:1]: My right knee arthritis is worse. I would like a physiotherapy referral and a care plan.
+[Speaker:0]: How long has the knee pain been present?
+[Speaker:1]: Years, but worse over six months. Pain going upstairs and walking more than ten minutes.
+[Speaker:0]: Any falls, locking, or giving way?
+[Speaker:1]: No falls. Sometimes stiffness.
+[Speaker:0]: Examination shows medial joint line tenderness and reduced range of motion. X-ray last year showed moderate osteoarthritis. We will prepare a GP Management Plan and Team Care Arrangement. I will refer you to physiotherapy for strengthening, gait work, mobility, and pain reduction. Review in three months.`},
+{title:"AU Asthma action plan - Child wheeze",body:`[Speaker:0]: Demo Australian sample. Patient Emily Brown, age 9, address SAMPLE 5 Ocean View Drive, Glenelg SA 5045. Parent Michelle Brown. Provider number DEMO845219TR.
+[Speaker:0]: What is happening with Emily today?
+[Speaker:1]: She has been coughing at night and wheezing after netball for about three weeks.
+[Speaker:0]: Any fever or chest pain?
+[Speaker:1]: No fever. She says her chest feels tight after running.
+[Speaker:0]: Oxygen saturation is 98 percent and temperature is normal. I can hear mild expiratory wheeze. This is consistent with asthma symptoms triggered by exercise and viral exposure.
+[Speaker:1]: What should we do?
+[Speaker:0]: I will provide an asthma action plan, prescribe salbutamol inhaler with spacer, advise two puffs before exercise and as needed, review technique today, and arrange follow-up in two weeks. I will include school asthma first aid instructions.`},
+{title:"AU Diabetes annual cycle - Dietitian podiatry",body:`[Speaker:0]: Demo Australian sample. Patient Ahmed Khan, age 54, address SAMPLE 91 Station Street, Auburn NSW 2144. Provider number DEMO502118CD.
+[Speaker:0]: You are here for your diabetes review and care plan update?
+[Speaker:1]: Yes. My sugars have been higher and I want help with diet.
+[Speaker:0]: HbA1c is 8.4 percent, blood pressure 138 over 84, weight 96 kg, BMI 31. You are taking metformin XR and gliclazide.
+[Speaker:1]: I sometimes forget the evening tablets.
+[Speaker:0]: Any numbness in feet, vision change, chest pain, or shortness of breath?
+[Speaker:1]: Some tingling in my feet at night.
+[Speaker:0]: Foot check shows reduced sensation over both big toes. We will update your chronic disease GP management plan and team care arrangement. Referrals include diabetes educator, dietitian, and podiatrist. We will order urine ACR, lipids, kidney function, and eye check reminder.`},
+{title:"AU Hypertension cardiovascular review",body:`[Speaker:0]: Demo Australian sample. Patient Maria Rossi, age 61, address SAMPLE 14 King Street, Fremantle WA 6160. Provider number DEMO919274WA.
+[Speaker:0]: You booked for blood pressure review?
+[Speaker:1]: Yes. My home readings have been around 155 over 90.
+[Speaker:0]: Any chest pain, shortness of breath, headaches, or visual symptoms?
+[Speaker:1]: No chest pain. Sometimes morning headaches.
+[Speaker:0]: Clinic blood pressure is 158 over 92, repeated 152 over 88. Cholesterol was elevated last month and you have a family history of heart disease.
+[Speaker:1]: My father had a heart attack at sixty.
+[Speaker:0]: I recommend starting amlodipine, reducing salt, arranging blood tests in two weeks, ECG today, and reviewing home readings in four weeks. We will calculate cardiovascular risk and consider statin therapy.`},
+{title:"AU NDIS support letter - Autism ADHD",body:`[Speaker:0]: Demo Australian sample. Patient Daniel Miller, age 11, address SAMPLE 66 Rivergum Lane, Logan QLD 4114. Parent Kate Miller. Provider number DEMO771638QL.
+[Speaker:0]: You are requesting a support letter for NDIS review?
+[Speaker:1]: Yes. Daniel has autism and ADHD. School is asking for updated documentation about functional difficulties.
+[Speaker:0]: Daniel, how have you been at school?
+[Speaker:2]: I get overwhelmed. The noise hurts and I leave the classroom.
+[Speaker:1]: He has run out of the classroom twice this term when distressed. We need more OT support for sensory regulation and daily routines.
+[Speaker:0]: I will document functional impact across communication, social interaction, learning, sensory processing, and emotional regulation. I will provide a GP support letter for NDIS review and recommend OT, speech therapy, psychology support, and school adjustments.`}
+];
+let currentPdfBytes=null,currentFieldNames=[],filledPdfBytes=null;
+const pdfInput=document.getElementById("pdf-upload"),pdfName=document.getElementById("pdf-name"),fieldCount=document.getElementById("field-count"),fieldList=document.getElementById("field-list"),fieldBadge=document.getElementById("field-badge"),conversationInput=document.getElementById("conversation-input"),sampleGrid=document.getElementById("sample-grid"),runButton=document.getElementById("run-fill"),downloadButton=document.getElementById("download-filled"),resultList=document.getElementById("result-list"),jsonOutput=document.getElementById("json-output"),mappedCount=document.getElementById("mapped-count"),missingCount=document.getElementById("missing-count"),confidenceMix=document.getElementById("confidence-mix"),runStatus=document.getElementById("run-status"),clearConversationBtn=document.getElementById("clear-conversation");
+function initSamples(){SAMPLE_CONVERSATIONS.forEach(sample=>{const card=document.createElement("button");card.type="button";card.className="sample-card";card.innerHTML=`<strong>${sample.title}</strong><p>${sample.body.slice(0,160)}...</p>`;card.addEventListener("click",()=>{conversationInput.value=sample.body;});sampleGrid.appendChild(card);});}
+function setStatus(text,type="idle"){runStatus.textContent=text;runStatus.style.background=type==="error"?"rgba(255,92,122,0.2)":"rgba(22,224,189,0.12)";runStatus.style.color=type==="error"?"#ff9bb0":"#7debd8";}
+function renderFieldList(names){if(!names.length){fieldList.classList.add("empty-state");fieldList.textContent="No fillable fields detected.";fieldBadge.textContent="No fields";return;}fieldList.classList.remove("empty-state");fieldList.innerHTML="";names.forEach(name=>{const chip=document.createElement("div");chip.className="field-chip";chip.textContent=name;fieldList.appendChild(chip);});fieldBadge.textContent=`${names.length} fields`;}
+async function loadPdfFromFile(file){const arrayBuffer=await file.arrayBuffer();currentPdfBytes=new Uint8Array(arrayBuffer);await inspectPdf();}
+async function inspectPdf(){if(!currentPdfBytes)return;try{const pdfDoc=await PDFLib.PDFDocument.load(currentPdfBytes);const form=pdfDoc.getForm();const fields=form.getFields();currentFieldNames=fields.map(field=>field.getName());fieldCount.textContent=String(currentFieldNames.length);renderFieldList(currentFieldNames);setStatus("PDF loaded");}catch(e){console.error(e);alert("Failed to read PDF fields. Ensure the form is fillable (AcroForm).");setStatus("PDF error","error");}}
+function extractAfter(pattern,text){const m=text.match(pattern);return m?m[1].trim():null;}
+async function callApplicationAI(){const raw=conversationInput.value;const conversation=raw.toLowerCase();const mapping={};const age=extractAfter(/age\s+([a-z0-9\- ]{1,20})[,\.]/i,raw);const address=extractAfter(/address\s+(SAMPLE[^\.\n]+)[\.\n]/i,raw);const provider=extractAfter(/provider number\s+(?:is\s+)?(DEMO[A-Z0-9]+)/i,raw);const patient=extractAfter(/patient\s+([^,\.]+)[,\.]/i,raw);currentFieldNames.forEach(field=>{const normalized=field.toLowerCase();let value=null;if(normalized.includes("provider"))value=provider;else if(normalized.includes("address"))value=address;else if(normalized.includes("age"))value=age;else if(normalized.includes("name"))value=patient;else if(normalized.includes("symptom")||normalized.includes("complaint")){if(conversation.includes("scoliosis"))value="Mild scoliosis; chiropractic care plan requested";else if(conversation.includes("lower back")||conversation.includes("spinal injury"))value="Chronic lower back pain, insomnia, exertional dyspnoea";else if(conversation.includes("anxiety")||conversation.includes("panic"))value="Anxiety, panic symptoms, insomnia and work stress";else if(conversation.includes("knee"))value="Right knee osteoarthritis pain and reduced walking tolerance";else if(conversation.includes("wheezing")||conversation.includes("asthma"))value="Cough, wheeze and exercise-related chest tightness";else if(conversation.includes("diabetes")||conversation.includes("sugars"))value="Elevated glucose readings with diabetes review needs";else if(conversation.includes("blood pressure"))value="Elevated blood pressure readings and morning headaches";else if(conversation.includes("autism")||conversation.includes("adhd"))value="Autism/ADHD functional impact and sensory regulation difficulties";}else if(normalized.includes("diagnosis")||normalized.includes("assessment")){if(conversation.includes("scoliosis"))value="Mild scoliosis requiring GPMP and chiropractic referral";else if(conversation.includes("obstructive pattern"))value="Asthma with obstructive spirometry pattern";else if(conversation.includes("anxiety"))value="Anxiety with severe psychological distress";else if(conversation.includes("osteoarthritis"))value="Right knee osteoarthritis";else if(conversation.includes("diabetes"))value="Type 2 diabetes with suboptimal control";else if(conversation.includes("blood pressure"))value="Hypertension and increased cardiovascular risk";else if(conversation.includes("ndis"))value="Autism and ADHD with functional impairment";}else if(normalized.includes("plan")||normalized.includes("treatment")||normalized.includes("referral")){if(conversation.includes("chiro"))value="GP management plan; referral for five chiropractic allied health sessions";else if(conversation.includes("pain specialist"))value="Pain specialist referral; asthma plan; exercise physiologist and diabetes educator referral";else if(conversation.includes("psychologist"))value="Mental Health Treatment Plan and psychologist referral";else if(conversation.includes("physiotherapy"))value="GPMP/TCA and physiotherapy referral";else if(conversation.includes("asthma action plan"))value="Asthma action plan, salbutamol inhaler with spacer and school instructions";else if(conversation.includes("dietitian"))value="CDM update; diabetes educator, dietitian and podiatry referrals";else if(conversation.includes("amlodipine"))value="Start amlodipine, ECG, blood tests and BP review";else if(conversation.includes("ndis"))value="GP support letter for NDIS review; OT, speech, psychology and school supports";}mapping[field]={value,confidence:value?0.86:0.2};});return{fields:mapping,note:"Demo local mapper using Australian sample conversations. Production API orchestration should be handled inside the application backend."};}
+function renderResult(mapping){const entries=Object.entries(mapping);resultList.innerHTML="";if(!entries.length){resultList.classList.add("empty-state");resultList.textContent="No mapped fields returned.";mappedCount.textContent="0";missingCount.textContent="0";confidenceMix.textContent="n/a";return;}resultList.classList.remove("empty-state");let mapped=0,missing=0;const confidences=[];entries.forEach(([field,meta])=>{const item=document.createElement("div");item.className="result-item";const value=meta&&meta.value!==undefined?meta.value:null;const confidence=meta&&typeof meta.confidence==="number"?meta.confidence:null;if(value!==null&&value!==""&&value!==undefined)mapped+=1;else missing+=1;if(confidence!==null)confidences.push(confidence);item.innerHTML=`<strong>${field}</strong><span>${value??"—"}</span><small>confidence: ${confidence??"n/a"}</small>`;resultList.appendChild(item);});mappedCount.textContent=String(mapped);missingCount.textContent=String(missing);confidenceMix.textContent=confidences.length?`avg ${((confidences.reduce((a,b)=>a+b,0)/confidences.length)*100).toFixed(0)}%`:"n/a";}
+async function fillPdfWithMapping(mapping){const pdfDoc=await PDFLib.PDFDocument.load(currentPdfBytes);const form=pdfDoc.getForm();Object.entries(mapping).forEach(([fieldName,meta])=>{const value=meta&&meta.value!==undefined?meta.value:null;if(value===null||value===undefined)return;try{form.getTextField(fieldName).setText(String(value));}catch(e){console.warn("Unable to set text field",fieldName,e);}});form.updateFieldAppearances();return await pdfDoc.save();}
+async function run(){if(!currentPdfBytes){alert("Upload a PDF form first.");return;}if(!conversationInput.value.trim()){alert("Provide a conversation.");return;}setStatus("AI mapping…");runButton.disabled=true;downloadButton.disabled=true;try{const parsed=await callApplicationAI();const mapping=parsed.fields||{};jsonOutput.textContent=JSON.stringify(parsed,null,2);renderResult(mapping);filledPdfBytes=await fillPdfWithMapping(mapping);downloadButton.disabled=false;setStatus("Completed");}catch(e){console.error(e);alert(e.message);setStatus("Error","error");}finally{runButton.disabled=false;}}
+function downloadPdf(){if(!filledPdfBytes)return;const blob=new Blob([filledPdfBytes],{type:"application/pdf"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download="filled-medical-form.pdf";document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);}
+pdfInput.addEventListener("change",e=>{const file=e.target.files&&e.target.files[0];if(file){pdfName.textContent=file.name;loadPdfFromFile(file);}});runButton.addEventListener("click",run);downloadButton.addEventListener("click",downloadPdf);clearConversationBtn.addEventListener("click",()=>{conversationInput.value="";});initSamples();
