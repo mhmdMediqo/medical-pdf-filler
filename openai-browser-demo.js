@@ -41,7 +41,7 @@ async function callOpenAIFromBrowser(payload) {
   const data = await response.json();
   const outputText = data.output_text || extractOutputText(data);
   if (!outputText) throw new Error("OpenAI response did not include output_text.");
-  return JSON.parse(outputText);
+  return normalizeStructuredOutput(JSON.parse(outputText));
 }
 
 function extractOutputText(data) {
@@ -52,6 +52,32 @@ function extractOutputText(data) {
     if (textPart) return textPart.text;
   }
   return "";
+}
+
+function normalizeStructuredOutput(parsed) {
+  if (parsed && parsed.fields) return parsed;
+
+  const fields = {};
+  if (parsed && Array.isArray(parsed.field_mappings)) {
+    parsed.field_mappings.forEach((item) => {
+      if (!item || !item.field_name) return;
+      fields[item.field_name] = {
+        value: item.value,
+        raw_value: item.raw_value,
+        confidence: item.confidence,
+        evidence: item.evidence,
+        reason: item.reason,
+        needs_review: item.needs_review
+      };
+    });
+  }
+
+  return {
+    fields,
+    unmapped_clinical_facts: parsed && Array.isArray(parsed.unmapped_clinical_facts) ? parsed.unmapped_clinical_facts : [],
+    warnings: parsed && Array.isArray(parsed.warnings) ? parsed.warnings : [],
+    overall_confidence: parsed && typeof parsed.overall_confidence === "number" ? parsed.overall_confidence : 0
+  };
 }
 
 const previousCallApplicationAI = callApplicationAI;
