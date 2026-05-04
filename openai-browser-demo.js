@@ -6,9 +6,11 @@ async function callOpenAIFromBrowser(payload) {
   const apiKeyInput = document.getElementById("api-key");
   const modelInput = document.getElementById("model-input");
   const apiKey = apiKeyInput ? apiKeyInput.value.trim() : "";
-  const model = modelInput && modelInput.value.trim() ? modelInput.value.trim() : "gpt-4.1";
+  const model = modelInput && modelInput.value.trim() ? modelInput.value.trim() : "gpt-5";
 
   if (!apiKey) return null;
+
+  const userContent = buildUserContentWithPdfImages(payload);
 
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -19,8 +21,8 @@ async function callOpenAIFromBrowser(payload) {
     body: JSON.stringify({
       model,
       input: [
-        { role: "system", content: payload.system },
-        { role: "user", content: payload.user }
+        { role: "system", content: [{ type: "input_text", text: payload.system }] },
+        { role: "user", content: userContent }
       ],
       text: {
         format: {
@@ -42,6 +44,19 @@ async function callOpenAIFromBrowser(payload) {
   const outputText = data.output_text || extractOutputText(data);
   if (!outputText) throw new Error("OpenAI response did not include output_text.");
   return normalizeStructuredOutput(JSON.parse(outputText));
+}
+
+function buildUserContentWithPdfImages(payload) {
+  const content = [{ type: "input_text", text: payload.user }];
+  const thumbnails = typeof getPdfPageThumbnailsForAI === "function" ? getPdfPageThumbnailsForAI() : [];
+
+  thumbnails.slice(0, 8).forEach((thumb) => {
+    if (!thumb || !thumb.dataUrl) return;
+    content.push({ type: "input_text", text: `Low-resolution screenshot of PDF page ${thumb.page}. Use this only to understand visible labels, section headings, and form layout.` });
+    content.push({ type: "input_image", image_url: thumb.dataUrl, detail: "low" });
+  });
+
+  return content;
 }
 
 function extractOutputText(data) {
@@ -85,7 +100,7 @@ callApplicationAI = async function browserAwareCallApplicationAI() {
   const payload = window.buildMediqoAIPayload({
     conversation: conversationInput.value,
     pdfFields: getPdfFieldInventory(),
-    documentContext: ""
+    documentContext: typeof getPdfDocumentContextForAI === "function" ? getPdfDocumentContextForAI() : ""
   });
   window.lastMediqoAIPayload = payload;
 
