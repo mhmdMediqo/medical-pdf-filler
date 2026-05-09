@@ -3,7 +3,7 @@
 
 window.SPECIAL_SAMPLE_CONVERSATIONS = [
   {
-    title: "⭐ ویژه - Full falls and function assessment",
+    title: "⭐ Featured - Full falls and function assessment",
     body: `[Speaker:0]: This is a DEMO Australian comprehensive falls and function assessment. Date of assessment is 09 May 2026. Client full name is DEMO Client Falls Assessment. Date of birth is 22 August 1941. Client ID is DEMO-FALLS-0007. Address is SAMPLE 12 Demo Grove, Geelong VIC 3220. Provider number is DEMO642918GH.
 [Speaker:0]: Before we begin, do I have your consent to complete this falls, mobility, function, home safety, and SPPB assessment today and to record the results in the form?
 [Speaker:1]: Yes, I consent.
