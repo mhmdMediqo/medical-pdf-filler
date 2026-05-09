@@ -1,8 +1,15 @@
 // Enhancements for production-like PDF mapping workflow.
-// Adds: richer PDF field inventory, type-aware filling, validation, and editable review UI.
+// Adds: richer PDF field inventory, type-aware filling, validation, editable review UI, and faster PDF generation.
 
 let reviewedFieldMapping = {};
 let advancedPdfFieldInventory = [];
+let cachedPdfDoc = null;
+let cachedPdfForm = null;
+let cachedPdfFormFields = [];
+
+function normalizeText(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
 
 function detectPdfFieldType(field) {
   const typeName = field && field.constructor && field.constructor.name ? field.constructor.name : "Unknown";
@@ -38,16 +45,7 @@ function buildInventoryItem(field, index) {
   const name = field.getName();
   const type = detectPdfFieldType(field);
   const options = getFieldOptions(field);
-  return {
-    name,
-    type,
-    page: null,
-    index,
-    options,
-    currentValue: getCurrentFieldValue(field, type),
-    nearbyLabel: name,
-    required: false
-  };
+  return { name, type, page: null, index, options, currentValue: getCurrentFieldValue(field, type), nearbyLabel: name, required: false };
 }
 
 function renderAdvancedFieldList(inventory) {
@@ -57,7 +55,6 @@ function renderAdvancedFieldList(inventory) {
     fieldBadge.textContent = "No fields";
     return;
   }
-
   fieldList.classList.remove("empty-state");
   fieldList.innerHTML = "";
   inventory.forEach((item) => {
@@ -73,10 +70,10 @@ function renderAdvancedFieldList(inventory) {
 inspectPdf = async function enhancedInspectPdf() {
   if (!currentPdfBytes) return;
   try {
-    const pdfDoc = await PDFLib.PDFDocument.load(currentPdfBytes);
-    const form = pdfDoc.getForm();
-    const fields = form.getFields();
-    advancedPdfFieldInventory = fields.map(buildInventoryItem);
+    cachedPdfDoc = await PDFLib.PDFDocument.load(currentPdfBytes);
+    cachedPdfForm = cachedPdfDoc.getForm();
+    cachedPdfFormFields = cachedPdfForm.getFields();
+    advancedPdfFieldInventory = cachedPdfFormFields.map(buildInventoryItem);
     currentFieldNames = advancedPdfFieldInventory.map((field) => field.name);
     fieldCount.textContent = String(currentFieldNames.length);
     renderAdvancedFieldList(advancedPdfFieldInventory);
@@ -94,6 +91,71 @@ getPdfFieldInventory = function enhancedPdfFieldInventory() {
     : currentFieldNames.map((name, index) => ({ name, type: "text", page: null, index, options: [], currentValue: null, nearbyLabel: name, required: false }));
 };
 
+function optionLooksLikeYes(option) {
+  const n = normalizeText(option);
+  return ["yes", "y", "true", "checked", "on", "1", "selected", "tick"].includes(n) || n.includes("yes");
+}
+
+function optionLooksLikeNo(option) {
+  const n = normalizeText(option);
+  return ["no", "n", "false", "unchecked", "off", "0", "not selected"].includes(n) || n.includes("no");
+}
+
+function coerceBooleanValue(value) {
+  if (typeof value === "boolean") return value;
+  const n = normalizeText(value);
+  if (["yes", "y", "true", "checked", "on", "1", "selected", "tick"].includes(n)) return true;
+  if (["no", "n", "false", "unchecked", "off", "0", "not selected", "none", "null"].includes(n)) return false;
+  return null;
+}
+
+function findBestOption(value, options) {
+  if (value === null || value === undefined || value === "" || !Array.isArray(options) || !options.length) return null;
+  const raw = String(value);
+  if (options.includes(raw)) return raw;
+  const target = normalizeText(raw);
+  let exact = options.find((option) => normalizeText(option) === target);
+  if (exact) return exact;
+  exact = options.find((option) => normalizeText(option).includes(target) || target.includes(normalizeText(option)));
+  if (exact) return exact;
+  const asBool = coerceBooleanValue(value);
+  if (asBool === true) return options.find(optionLooksLikeYes) || null;
+  if (asBool === false) return options.find(optionLooksLikeNo) || null;
+  return null;
+}
+
+function normalizeValueForField(field, item, warnings) {
+  if (!item || item.value === null || item.value === undefined || item.value === "") return item;
+  if (field.type === "checkbox") {
+    const boolValue = coerceBooleanValue(item.value);
+    if (boolValue === null) {
+      item.raw_value = String(item.value);
+      item.value = null;
+      item.confidence = Math.min(Number(item.confidence || 0), 0.4);
+      item.needs_review = true;
+      warnings.push(`Checkbox value needs review for ${field.name}`);
+    } else {
+      item.value = boolValue;
+      item.raw_value = String(boolValue);
+    }
+    return item;
+  }
+  if (["dropdown", "radio", "option_list"].includes(field.type)) {
+    const matched = findBestOption(item.value, field.options);
+    if (matched === null && field.options && field.options.length) {
+      item.raw_value = String(item.value);
+      item.value = null;
+      item.confidence = Math.min(Number(item.confidence || 0), 0.4);
+      item.needs_review = true;
+      warnings.push(`Invalid option rejected for ${field.name}: ${item.raw_value}`);
+    } else if (matched !== null) {
+      item.value = matched;
+      item.raw_value = matched;
+    }
+  }
+  return item;
+}
+
 function validateAIMapping(parsed, inventory) {
   const warnings = Array.isArray(parsed.warnings) ? [...parsed.warnings] : [];
   const fields = parsed.fields && typeof parsed.fields === "object" ? parsed.fields : {};
@@ -101,14 +163,7 @@ function validateAIMapping(parsed, inventory) {
 
   inventory.forEach((field) => {
     if (!Object.prototype.hasOwnProperty.call(fields, field.name)) {
-      fields[field.name] = {
-        value: null,
-        raw_value: null,
-        confidence: 0,
-        evidence: "Field missing from AI output",
-        reason: "Validation inserted this field because every PDF field must be returned exactly once.",
-        needs_review: true
-      };
+      fields[field.name] = { value: null, raw_value: null, confidence: 0, evidence: "Field missing from AI output", reason: "Validation inserted this field because every PDF field must be returned exactly once.", needs_review: true };
       warnings.push(`Missing field inserted: ${field.name}`);
     }
   });
@@ -120,34 +175,7 @@ function validateAIMapping(parsed, inventory) {
     }
   });
 
-  inventory.forEach((field) => {
-    const item = fields[field.name];
-    if (!item || item.value === null || item.value === undefined || item.value === "") return;
-
-    if (["dropdown", "radio", "option_list"].includes(field.type) && field.options && field.options.length) {
-      const value = String(item.value);
-      if (!field.options.includes(value)) {
-        item.raw_value = value;
-        item.value = null;
-        item.confidence = Math.min(Number(item.confidence || 0), 0.4);
-        item.needs_review = true;
-        warnings.push(`Invalid option rejected for ${field.name}: ${value}`);
-      }
-    }
-
-    if (field.type === "checkbox" && typeof item.value !== "boolean") {
-      const normalized = String(item.value).toLowerCase();
-      if (["yes", "true", "checked", "1"].includes(normalized)) item.value = true;
-      else if (["no", "false", "unchecked", "0"].includes(normalized)) item.value = false;
-      else {
-        item.raw_value = String(item.value);
-        item.value = null;
-        item.needs_review = true;
-        warnings.push(`Checkbox value needs review for ${field.name}`);
-      }
-    }
-  });
-
+  inventory.forEach((field) => normalizeValueForField(field, fields[field.name], warnings));
   parsed.fields = fields;
   parsed.warnings = warnings;
   return parsed;
@@ -159,11 +187,14 @@ callApplicationAI = async function enhancedCallApplicationAI() {
   return validateAIMapping(parsed, getPdfFieldInventory());
 };
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
+}
+
 renderResult = function enhancedRenderResult(mapping) {
   reviewedFieldMapping = JSON.parse(JSON.stringify(mapping || {}));
   const entries = Object.entries(reviewedFieldMapping);
   resultList.innerHTML = "";
-
   if (!entries.length) {
     resultList.classList.add("empty-state");
     resultList.textContent = "No mapped fields returned.";
@@ -174,8 +205,7 @@ renderResult = function enhancedRenderResult(mapping) {
   }
 
   resultList.classList.remove("empty-state");
-  let mapped = 0;
-  let missing = 0;
+  let mapped = 0, missing = 0;
   const confidences = [];
   const inventoryByName = Object.fromEntries(getPdfFieldInventory().map((field) => [field.name, field]));
 
@@ -185,20 +215,19 @@ renderResult = function enhancedRenderResult(mapping) {
     const confidence = meta && typeof meta.confidence === "number" ? meta.confidence : 0;
     if (value !== null && value !== "" && value !== undefined) mapped += 1; else missing += 1;
     confidences.push(confidence);
-
     const item = document.createElement("div");
     item.className = `result-item review-item ${meta && meta.needs_review ? "needs-review" : ""}`;
 
     let controlHtml = "";
     if (fieldInfo.type === "checkbox") {
-      controlHtml = `<select data-review-field="${fieldName}"><option value="">-- unset --</option><option value="true" ${value === true ? "selected" : ""}>Checked</option><option value="false" ${value === false ? "selected" : ""}>Unchecked</option></select>`;
+      controlHtml = `<select data-review-field="${escapeHtml(fieldName)}"><option value="">-- unset --</option><option value="true" ${value === true ? "selected" : ""}>Checked</option><option value="false" ${value === false ? "selected" : ""}>Unchecked</option></select>`;
     } else if (["dropdown", "radio", "option_list"].includes(fieldInfo.type) && fieldInfo.options && fieldInfo.options.length) {
-      controlHtml = `<select data-review-field="${fieldName}"><option value="">-- unset --</option>${fieldInfo.options.map((option) => `<option value="${String(option).replaceAll('"', '&quot;')}" ${String(value) === String(option) ? "selected" : ""}>${option}</option>`).join("")}</select>`;
+      controlHtml = `<select data-review-field="${escapeHtml(fieldName)}"><option value="">-- unset --</option>${fieldInfo.options.map((option) => `<option value="${escapeHtml(option)}" ${String(value) === String(option) ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select>`;
     } else {
-      controlHtml = `<textarea data-review-field="${fieldName}" rows="2">${value ?? ""}</textarea>`;
+      controlHtml = `<textarea data-review-field="${escapeHtml(fieldName)}" rows="2">${escapeHtml(value ?? "")}</textarea>`;
     }
 
-    item.innerHTML = `<div class="review-top"><strong>${fieldName}</strong><span>${fieldInfo.type}</span></div>${controlHtml}<small>confidence: ${confidence.toFixed(2)} | review: ${meta && meta.needs_review ? "required" : "not required"}</small><small>${meta && meta.evidence ? meta.evidence : "No evidence supplied"}</small>`;
+    item.innerHTML = `<div class="review-top"><strong>${escapeHtml(fieldName)}</strong><span>${escapeHtml(fieldInfo.type)}</span></div>${controlHtml}<small>confidence: ${confidence.toFixed(2)} | review: ${meta && meta.needs_review ? "required" : "not required"}</small><small>${escapeHtml(meta && meta.evidence ? meta.evidence : "No evidence supplied")}</small>`;
     resultList.appendChild(item);
   });
 
@@ -220,6 +249,11 @@ renderResult = function enhancedRenderResult(mapping) {
   confidenceMix.textContent = confidences.length ? `avg ${((confidences.reduce((a, b) => a + b, 0) / confidences.length) * 100).toFixed(0)}%` : "n/a";
 };
 
+function getPdfFormForGeneration() {
+  if (!cachedPdfDoc || !cachedPdfForm) throw new Error("PDF form cache is not ready. Re-upload the PDF and try again.");
+  return { pdfDoc: cachedPdfDoc, form: cachedPdfForm };
+}
+
 function setPdfFieldValue(form, fieldInfo, value) {
   if (value === null || value === undefined || value === "") return;
   const name = fieldInfo.name;
@@ -230,35 +264,40 @@ function setPdfFieldValue(form, fieldInfo, value) {
       return;
     }
     if (fieldInfo.type === "radio") {
-      form.getRadioGroup(name).select(String(value));
+      const matched = findBestOption(value, fieldInfo.options) || String(value);
+      form.getRadioGroup(name).select(matched);
       return;
     }
     if (fieldInfo.type === "dropdown") {
-      form.getDropdown(name).select(String(value));
+      const matched = findBestOption(value, fieldInfo.options) || String(value);
+      form.getDropdown(name).select(matched);
       return;
     }
     if (fieldInfo.type === "option_list") {
-      form.getOptionList(name).select(String(value));
+      const matched = findBestOption(value, fieldInfo.options) || String(value);
+      form.getOptionList(name).select(matched);
       return;
     }
     form.getTextField(name).setText(String(value));
   } catch (error) {
-    console.warn("Unable to set PDF field", name, error);
+    console.warn("Unable to set PDF field", name, fieldInfo.type, value, error);
   }
 }
 
 fillPdfWithMapping = async function enhancedFillPdfWithMapping(mapping) {
+  const start = performance.now();
   const sourceMapping = Object.keys(reviewedFieldMapping).length ? reviewedFieldMapping : mapping;
-  const pdfDoc = await PDFLib.PDFDocument.load(currentPdfBytes);
-  const form = pdfDoc.getForm();
+  const { pdfDoc, form } = getPdfFormForGeneration();
   const inventory = getPdfFieldInventory();
 
-  inventory.forEach((fieldInfo) => {
+  for (const fieldInfo of inventory) {
     const meta = sourceMapping[fieldInfo.name];
     const value = meta && meta.value !== undefined ? meta.value : null;
     setPdfFieldValue(form, fieldInfo, value);
-  });
+  }
 
   form.updateFieldAppearances();
-  return await pdfDoc.save();
+  const bytes = await pdfDoc.save({ useObjectStreams: true, addDefaultPage: false });
+  console.info(`PDF generated in ${Math.round(performance.now() - start)}ms`);
+  return bytes;
 };
